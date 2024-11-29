@@ -7,7 +7,6 @@ import (
 	"os"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -81,7 +80,7 @@ func TestMain(m *testing.M) {
 }
 
 func runTests(m *testing.M) int {
-	path := "./db_" + strconv.FormatInt(time.Now().Unix(), 10)
+	path := "./db_" + uuid.NewString()
 	defer os.RemoveAll(path)
 
 	db, err := badgerdb.Open(badgerdb.DefaultOptions(path))
