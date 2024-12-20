@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,6 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/components/delay"
 	"github.com/ThreeDotsLabs/watermill/message"
-	"github.com/google/uuid"
 
 	badgerdb "github.com/dgraph-io/badger/v4"
 
@@ -24,7 +24,7 @@ import (
 var testDB *badgerdb.DB
 
 func ExamplePublisher() {
-	registry := badger.NewInMemoryRegistry(badger.InMemoryRegistryConfig{})
+	registry := badger.NewRegistry(testDB, badger.RegistryConfig{})
 
 	subscriber := badger.NewSubscriber(testDB, registry, badger.SubscriberConfig{})
 	defer subscriber.Close()
@@ -44,20 +44,9 @@ func ExamplePublisher() {
 	//output: payload
 }
 
-func BenchmarkPublisher_InMemory(b *testing.B) {
-	benchmarkPublisher(b, badger.NewInMemoryRegistry(badger.InMemoryRegistryConfig{
-		Prefix: uuid.NewString(),
-	}))
-}
-
-func BenchmarkPublisher_Persistent(b *testing.B) {
-	benchmarkPublisher(b, badger.NewPersistentRegistry(testDB, badger.PersistentRegistryConfig{
-		Prefix: uuid.NewString(),
-	}))
-}
-
-func benchmarkPublisher(b *testing.B, r badger.Registry) {
-	subscriber := badger.NewSubscriber(testDB, r, badger.SubscriberConfig{})
+func BenchmarkPublisher(b *testing.B) {
+	registry := newRegistry()
+	subscriber := badger.NewSubscriber(testDB, registry, badger.SubscriberConfig{})
 	defer subscriber.Close()
 
 	_, err := subscriber.Subscribe(context.Background(), "topic")
@@ -68,7 +57,7 @@ func benchmarkPublisher(b *testing.B, r badger.Registry) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		publisher := badger.NewPublisher(testDB, r, badger.PublisherConfig{})
+		publisher := badger.NewPublisher(testDB, registry, badger.PublisherConfig{})
 		defer publisher.Close()
 
 		publisher.Publish("topic", message.NewMessage(watermill.NewUUID(), message.Payload("payload")))
@@ -80,7 +69,7 @@ func TestMain(m *testing.M) {
 }
 
 func runTests(m *testing.M) int {
-	path := "./db_" + uuid.NewString()
+	path := "./db_" + strconv.FormatInt(time.Now().Unix(), 10)
 	defer os.RemoveAll(path)
 
 	db, err := badgerdb.Open(badgerdb.DefaultOptions(path))

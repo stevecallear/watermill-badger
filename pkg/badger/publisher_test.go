@@ -84,7 +84,9 @@ func testPublisher_Publish(
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := newInMemoryRegistry()
+			r := newRegistry()
+			defer r.Close()
+
 			sut, discard, commit := init(r)
 			defer discard()
 			defer sut.Close()

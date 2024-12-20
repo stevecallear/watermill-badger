@@ -6,25 +6,20 @@ import (
 
 	"github.com/ThreeDotsLabs/watermill/components/delay"
 	"github.com/ThreeDotsLabs/watermill/message"
+	"github.com/dgraph-io/badger/v4"
 )
 
-type (
-	// TxPublisher represents a BadgerDB Watermill publisher
-	// TxPublisher would be typically be used in scenarios where messages must
-	// be published within a pre-existing transaction as part of an outbox pattern.
-	TxPublisher struct {
-		tx       Tx
-		registry Registry
-		config   PublisherConfig
-	}
-
-	Tx interface {
-		Set(key []byte, val []byte) error
-	}
-)
+// TxPublisher represents a BadgerDB Watermill publisher
+// TxPublisher would be typically be used in scenarios where messages must
+// be published within a pre-existing transaction as part of an outbox pattern.
+type TxPublisher struct {
+	tx       *badger.Txn
+	registry Registry
+	config   PublisherConfig
+}
 
 // NewTxPublisher returns a new publisher using the specified transaction
-func NewTxPublisher(tx Tx, r Registry, c PublisherConfig) TxPublisher {
+func NewTxPublisher(tx *badger.Txn, r Registry, c PublisherConfig) TxPublisher {
 	c.setDefaults()
 
 	return TxPublisher{
@@ -44,41 +39,35 @@ func (p TxPublisher) Publish(topic string, messages ...*message.Message) error {
 		return nil
 	}
 
-	prefixes, err := p.registry.GetPrefixes(topic)
+	subscriptions, err := p.registry.Subscriptions(topic)
 	if err != nil {
-		return fmt.Errorf("failed to retrieve subscription prefixes: %w", err)
+		return fmt.Errorf("failed to retrieve subscriptions: %w", err)
 	}
 
-	if len(prefixes) < 1 {
+	if len(subscriptions) < 1 {
 		return nil
 	}
 
-	sequence, err := p.registry.GetSequence(topic, uint64(len(messages)*len(prefixes)))
-	if err != nil {
-		return err
-	}
-	defer sequence.Release()
-
 	now := time.Now().UTC()
 
-	for _, message := range messages {
-		value, err := p.marshalMessage(message, now)
-		if err != nil {
-			return fmt.Errorf("failed to marshal message: %w", err)
-		}
-
-		dueAt, err := p.getDueAt(message, now)
-		if err != nil {
-			return fmt.Errorf("failed to parse delay: %w", err)
-		}
-
-		for _, prefix := range prefixes {
-			seq, err := sequence.Next()
+	for _, subscription := range subscriptions {
+		for _, message := range messages {
+			sequence, err := subscription.Sequence.Next()
 			if err != nil {
-				return fmt.Errorf("failed to get next sequence: %w", err)
+				return err
 			}
 
-			key := encodeKey(prefix, dueAt, seq)
+			value, err := p.marshalMessage(message, now)
+			if err != nil {
+				return fmt.Errorf("failed to marshal message: %w", err)
+			}
+
+			dueAt, err := p.getDueAt(message, now)
+			if err != nil {
+				return fmt.Errorf("failed to parse delay: %w", err)
+			}
+
+			key := EncodeMessageKey(subscription.MessageKeyPrefix, dueAt, sequence)
 			if err = p.tx.Set(key, value); err != nil {
 				return fmt.Errorf("failed to write message: %w", err)
 			}

@@ -2,9 +2,9 @@ package badger_test
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 	"testing"
 	"time"
 
@@ -14,33 +14,28 @@ import (
 	"github.com/stevecallear/watermill-badger/pkg/badger"
 )
 
-func TestPubSub_InMemory(t *testing.T) {
-	testPubSub(t, newInMemoryRegistry())
-}
+func TestPubSub(t *testing.T) {
+	registry := newRegistry()
+	defer registry.Close()
 
-func TestPubSub_Persistent(t *testing.T) {
-	testPubSub(t, newPersistentRegistry())
-}
-
-func testPubSub(t *testing.T, r badger.Registry) {
-	p := badger.NewPublisher(testDB, r, badger.PublisherConfig{})
-	defer p.Close()
+	publisher := badger.NewPublisher(testDB, registry, badger.PublisherConfig{})
+	defer publisher.Close()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 
-	s := badger.NewSubscriber(testDB, r, badger.SubscriberConfig{
-		ReceiveInterval:   100 * time.Millisecond,
-		VisibilityTimeout: 2 * time.Second,
+	subscriber := badger.NewSubscriber(testDB, registry, badger.SubscriberConfig{
+		ReceiveInterval:   10 * time.Millisecond,
+		VisibilityTimeout: 20 * time.Millisecond,
 		Logger:            watermill.NewSlogLogger(logger),
 	})
-	defer s.Close()
+	defer subscriber.Close()
 
-	testDelayedPublish(t, p, s)
-	testVisibilityTimeout(t, p, s)
-	testFanOut(t, p, r, watermill.NewSlogLogger(logger))
-	testLargeBatch(t, p, s)
+	testDelayedPublish(t, publisher, subscriber)
+	testVisibilityTimeout(t, publisher, subscriber)
+	testFanOut(t, publisher, registry, watermill.NewSlogLogger(logger))
+	testLargeBatch(t, publisher, subscriber)
 }
 
 func testDelayedPublish(t *testing.T, p message.Publisher, s message.Subscriber) {
@@ -61,7 +56,7 @@ func testDelayedPublish(t *testing.T, p message.Publisher, s message.Subscriber)
 		}
 
 		assertMessageReceived(t, ch, time.Second, exp2, true)
-		assertMessageReceived(t, ch, 5*time.Second, exp1, true)
+		assertMessageReceived(t, ch, time.Second, exp1, true)
 	})
 }
 
@@ -82,7 +77,7 @@ func testVisibilityTimeout(t *testing.T, p message.Publisher, s message.Subscrib
 		}
 
 		assertMessageReceived(t, ch, time.Second, exp, false)
-		assertMessageReceived(t, ch, 5*time.Second, exp, true)
+		assertMessageReceived(t, ch, time.Second, exp, true)
 	})
 }
 
@@ -90,7 +85,7 @@ func testFanOut(t *testing.T, p message.Publisher, r badger.Registry, l watermil
 	const topic = "fanout"
 
 	config := badger.SubscriberConfig{
-		ReceiveInterval:   100 * time.Millisecond,
+		ReceiveInterval:   10 * time.Millisecond,
 		ReceiveBatchSize:  100,
 		VisibilityTimeout: time.Second,
 		Logger:            l,
@@ -132,25 +127,31 @@ func testFanOut(t *testing.T, p message.Publisher, r badger.Registry, l watermil
 func testLargeBatch(t *testing.T, p message.Publisher, s message.Subscriber) {
 	t.Run("should handle large message batches", func(t *testing.T) {
 		const topic = "batch"
-		const batchSize = 1000
+		const batchCount = 100
+		const batchSize = 100
 
 		ch, err := s.Subscribe(context.Background(), topic)
 		if !assertNilError(t, err) {
 			return
 		}
 
-		messages := make([]*message.Message, batchSize)
-		for i := range messages {
-			messages[i] = newMessage("payload_" + strconv.Itoa(i))
+		batches := make([][]*message.Message, batchCount)
+		for i := range batches {
+			batches[i] = make([]*message.Message, batchSize)
+			for j := range batches[i] {
+				batches[i][j] = newMessage(fmt.Sprintf("payload_%d_%d", i, j))
+			}
+
+			err = p.Publish(topic, batches[i]...)
+			if !assertNilError(t, err) {
+				return
+			}
 		}
 
-		err = p.Publish(topic, messages...)
-		if !assertNilError(t, err) {
-			return
-		}
-
-		for i := 0; i < batchSize; i++ {
-			assertMessageReceived(t, ch, 5*time.Second, messages[i], true)
+		for i := range batches {
+			for j := range batches[i] {
+				assertMessageReceived(t, ch, time.Second, batches[i][j], true)
+			}
 		}
 	})
 }
