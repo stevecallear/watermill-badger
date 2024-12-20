@@ -25,6 +25,7 @@ var testDB *badgerdb.DB
 
 func ExamplePublisher() {
 	registry := badger.NewRegistry(testDB, badger.RegistryConfig{})
+	defer registry.Close()
 
 	subscriber := badger.NewSubscriber(testDB, registry, badger.SubscriberConfig{})
 	defer subscriber.Close()

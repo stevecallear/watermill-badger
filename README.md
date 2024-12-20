@@ -11,6 +11,7 @@ go get github.com/stevecallear/watermill-badger@latest
 ```
 ```
 registry := badger.NewRegistry(testDB, badger.RegistryConfig{})
+defer registry.Close()
 
 subscriber := badger.NewSubscriber(testDB, registry, badger.SubscriberConfig{})
 defer subscriber.Close()
