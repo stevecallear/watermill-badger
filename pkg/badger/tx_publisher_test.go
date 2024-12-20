@@ -6,6 +6,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/components/delay"
 	"github.com/ThreeDotsLabs/watermill/message"
+	"github.com/google/uuid"
 
 	"github.com/stevecallear/watermill-badger/pkg/badger"
 )
@@ -29,20 +30,9 @@ func TestTxPublisher_Publish(t *testing.T) {
 		assertErrorExists(t, err, true)
 	}
 
-	t.Run("should return an error if the prefixes cannot be obtained", func(t *testing.T) {
+	t.Run("should return an error if the subscriptions cannot be obtained", func(t *testing.T) {
 		m := message.NewMessage(watermill.NewUUID(), message.Payload("payload"))
 		execErrorTest(&testRegistry{}, m)
-	})
-
-	t.Run("should return an error if the sequence cannot be obtained", func(t *testing.T) {
-		m := message.NewMessage(watermill.NewUUID(), message.Payload("payload"))
-		execErrorTest(&testRegistry{
-			getPrefixes: func(s string) ([][]byte, error) {
-				return [][]byte{
-					[]byte("prefix"),
-				}, nil
-			},
-		}, m)
 	})
 
 	t.Run("should return an error if delay metadata is invalid", func(t *testing.T) {
@@ -50,28 +40,18 @@ func TestTxPublisher_Publish(t *testing.T) {
 		m.Metadata.Set(delay.DelayedUntilKey, "invalid")
 
 		execErrorTest(&testRegistry{
-			getPrefixes: func(s string) ([][]byte, error) {
-				return [][]byte{
-					[]byte("prefix"),
-				}, nil
-			},
-			getSequence: func(s string, u uint64) (badger.Sequence, error) {
-				return &testSequence{}, nil
-			},
-		}, m)
-	})
+			subscriptionsFn: func(_ string) ([]*badger.Subscription, error) {
+				seq, err := testDB.GetSequence([]byte(uuid.NewString()), 100)
+				if err != nil {
+					return nil, err
+				}
 
-	t.Run("should return an error if the next sequence cannot be obtained", func(t *testing.T) {
-		m := message.NewMessage(watermill.NewUUID(), message.Payload("payload"))
-
-		execErrorTest(&testRegistry{
-			getPrefixes: func(s string) ([][]byte, error) {
-				return [][]byte{
-					[]byte("prefix"),
+				return []*badger.Subscription{
+					{
+						Sequence:         seq,
+						MessageKeyPrefix: []byte("message"),
+					},
 				}, nil
-			},
-			getSequence: func(s string, u uint64) (badger.Sequence, error) {
-				return &testSequence{}, nil
 			},
 		}, m)
 	})

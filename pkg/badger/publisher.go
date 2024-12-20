@@ -2,7 +2,6 @@ package badger
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/dgraph-io/badger/v4"
@@ -38,19 +37,10 @@ func NewPublisher(db *badger.DB, r Registry, c PublisherConfig) Publisher {
 
 // Publish publishes the specified messages
 func (p Publisher) Publish(topic string, messages ...*message.Message) error {
-	batch := p.db.NewWriteBatch()
-	defer batch.Cancel()
-
-	publisher := NewTxPublisher(batch, p.registry, p.config)
-	if err := publisher.Publish(topic, messages...); err != nil {
-		return err
-	}
-
-	if err := batch.Flush(); err != nil {
-		return fmt.Errorf("failed to flush batch: %w", err)
-	}
-
-	return nil
+	return p.db.Update(func(tx *badger.Txn) error {
+		publisher := NewTxPublisher(tx, p.registry, p.config)
+		return publisher.Publish(topic, messages...)
+	})
 }
 
 func (p Publisher) Close() error {

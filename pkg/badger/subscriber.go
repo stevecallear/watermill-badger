@@ -53,7 +53,7 @@ func NewSubscriber(db *badger.DB, r Registry, c SubscriberConfig) *Subscriber {
 
 // Subscriber creates a subscription to the specified topic
 func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *message.Message, error) {
-	prefix, err := s.registry.CreatePrefix(topic, s.config.Name)
+	subscription, err := s.registry.Register(topic, s.config.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string) (<-chan *messa
 	ch := make(chan *message.Message)
 
 	s.wg.Add(1)
-	go s.run(ctx, topic, prefix, ch)
+	go s.run(ctx, topic, subscription.MessageKeyPrefix, ch)
 
 	return ch, nil
 }
@@ -102,7 +102,7 @@ func (s *Subscriber) run(ctx context.Context, topic string, prefix []byte, ch ch
 }
 
 func (s *Subscriber) receiveMessages(ctx context.Context, topic string, prefix []byte, ch chan<- *message.Message) error {
-	messages, err := s.getMessages(topic, prefix)
+	messages, err := s.getMessages(prefix)
 	if err != nil {
 		return fmt.Errorf("failed to get messages: %w", err)
 	}
@@ -125,17 +125,11 @@ func (s *Subscriber) receiveMessages(ctx context.Context, topic string, prefix [
 	return nil
 }
 
-func (s *Subscriber) getMessages(topic string, prefix []byte) ([]rawMessage, error) {
+func (s *Subscriber) getMessages(prefix []byte) ([]rawMessage, error) {
 	var messages []rawMessage
 	now := time.Now().UTC()
 
-	sequence, err := s.registry.GetSequence(topic, uint64(s.config.ReceiveBatchSize))
-	if err != nil {
-		return nil, err
-	}
-	defer sequence.Release()
-
-	err = s.db.Update(func(tx *badger.Txn) error {
+	err := s.db.Update(func(tx *badger.Txn) error {
 		iter := tx.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
 
@@ -146,13 +140,12 @@ func (s *Subscriber) getMessages(topic string, prefix []byte) ([]rawMessage, err
 			}
 
 			item := iter.Item()
-			key := key(item.KeyCopy(nil))
+			key := MessageKey(item.KeyCopy(nil))
 
-			if err := key.validate(); err != nil {
+			dueAt, err := key.DueAt()
+			if err != nil {
 				return err
 			}
-
-			dueAt := key.dueAt()
 			if dueAt.After(now) {
 				break
 			}
@@ -162,12 +155,11 @@ func (s *Subscriber) getMessages(topic string, prefix []byte) ([]rawMessage, err
 				return err
 			}
 
-			seq, err := sequence.Next()
+			newKey, err := key.Update(dueAt.Add(s.config.VisibilityTimeout))
 			if err != nil {
 				return err
 			}
 
-			newKey := key.copy(dueAt.Add(s.config.VisibilityTimeout), seq)
 			if err := tx.Set(newKey, value); err != nil {
 				return err
 			}
