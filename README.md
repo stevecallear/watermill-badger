@@ -10,13 +10,7 @@
 go get github.com/stevecallear/watermill-badger@latest
 ```
 ```
-db, err := badgerdb.Open(badgerdb.DefaultOptions("./badger"))
-if err != nil {
-    log.Fatal(err)
-}
-defer db.Close()
-
-registry := badger.NewInMemoryRegistry(badger.InMemoryRegistryConfig{})
+registry := badger.NewRegistry(testDB, badger.RegistryConfig{})
 
 subscriber := badger.NewSubscriber(testDB, registry, badger.SubscriberConfig{})
 defer subscriber.Close()
@@ -37,10 +31,10 @@ fmt.Println(string(msg.Payload))
 ```
 
 ## Registry
-The `Registry` is responsible for sequence generation and key prefix storage. `badger.NewInMemoryRegistry` returns an in-memory implementation that provides consistency on a per-instance basis. If persistence is required then `badger.NewPersistentRegistry` returns a DB-backed implementation with prefix persistence and global sequences. Due to Badger DB instances not being shareable across processes the `InMemoryRegistry` is typically sufficient for the majority of use cases.
+The `Registry` is responsible for sequence generation and key prefix storage. The default implementation returned by `badger.NewRegistry` uses long-lived `badger.Sequence` instances per-subscription. As Badger DB instances cannot be shared across processes the implementation stores topic/subscription registrations only in-memory. While this should be sufficient for the vast majority of use cases, a DB-backed implementation could be created as required.
 
 ## Message Delivery
-Messages will generally be delivered to subscribers in FIFO order. Sequences are unique for the specific instance when using the `InMemoryRegistry`. It is therefore unlikely, but not impossible that two messages will have the same due time (nanosecond precision) and sequence. In this case ordering will be random. `PersistentRegistry` makes use of Badger DB sequences so will guarantee ordering assuming the sequence key remains stable.
+Messages will be delivered to subscribers in FIFO order. Due times are accurate to nanosecond precision with per-topic sequences guaranteeing ordering for message batches.
 
 ## Visibility Timeout
 The implementation adopts a visibility timeout model. This means that when a message is consumed it remains persisted with a configurable timeout value. Should the message be nacked, or the the process stopped during processing, then the message will be redelivered once the timeout period has elapsed.
